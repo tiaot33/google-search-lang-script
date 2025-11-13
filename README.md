@@ -15,11 +15,28 @@
 
 ## 安装
 
+### 方式一：直接安装（推荐）
+
+1. 安装 [Tampermonkey](https://www.tampermonkey.net/)（或兼容的用户脚本管理器）。
+2. 点击下方链接直接安装脚本：
+   - **[安装 Google Search Language Filter](https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.user.js)**
+3. 在 Tampermonkey 安装确认页面点击"安装"按钮。
+
+### 方式二：手动安装
+
 1. 安装 Tampermonkey（或兼容的用户脚本管理器）。
 2. 在 Tampermonkey 中创建一个新脚本。
 3. 将仓库根目录下 `google-search-language-filter.user.js` 的全部内容复制到新脚本中并保存。
 
-脚本的匹配范围为 `*://www.google.*/*`，仅在 Google 搜索结果页（`/search` 路径）上执行语言过滤逻辑。
+### 自动更新
+
+脚本支持自动更新功能：
+
+- **更新检查**：脚本使用 `google-search-language-filter.meta.js` 文件进行版本检查
+- **自动下载**：发现新版本时，Tampermonkey 会自动下载并安装更新
+- **手动更新**：也可以在 Tampermonkey 管理面板中手动检查更新
+
+脚本的匹配范围涵盖所有 Google 国际域名（如 `.com`、`.cn`、`.jp` 等），仅在 Google 搜索结果页（`/search` 路径）上执行语言过滤逻辑。
 
 ## 使用说明
 
@@ -56,9 +73,20 @@
   - 保持 `q`, `start`, `source` 等其它参数不变。
 - 当 URL 中的 `lr` 与当前配置一致时，脚本不会触发额外跳转，避免循环重定向。
 
+## 项目文件说明
+
+仓库包含以下主要文件：
+
+- **`google-search-language-filter.user.js`** - 完整的用户脚本文件，包含所有功能代码
+- **`google-search-language-filter.meta.js`** - 元数据文件，仅包含脚本头部信息，用于自动更新检查
+- **`languagecodes.csv`** - 语言代码参考表，列出所有支持的语言及其对应代码
+- **`README.md`** - 项目说明文档
+
+> **注意**：安装时只需使用 `.user.js` 文件。`.meta.js` 文件由 Tampermonkey 自动调用进行更新检查。
+
 ## 语言代码参考（languagecodes.csv）
 
-仓库根目录的 `languagecodes.csv` 提供了“语言名称 → 语言代码 → Criterion ID”的完整对照表，例如：
+仓库根目录的 `languagecodes.csv` 提供了"语言名称 → 语言代码 → Criterion ID"的完整对照表，例如：
 
 ```text
 Language name,Language code,Criterion ID
