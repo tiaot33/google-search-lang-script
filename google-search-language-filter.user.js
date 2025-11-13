@@ -17,7 +17,7 @@
 // @description:ru    Автоматически применяет языковые фильтры lr=lang_* к результатам поиска Google на основе выбранных языков.
 // @homepageURL  https://github.com/tiaot33/google-search-lang-script
 // @downloadURL  https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.user.js
-// @updateURL    https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.user.js
+// @updateURL    https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.meta.js
 // @supportURL   https://github.com/tiaot33/google-search-lang-script/issues
 // @match              *://*.google.com/search*
 // @match              *://*.google.ad/search*
