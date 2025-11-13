@@ -7,7 +7,7 @@
 // @name:fa      فیلتر زبان جستجوی گوگل
 // @name:ru      Фильтр языка поиска Google
 // @namespace    google-search-lang-script
-// @version      0.1.0
+// @version      0.1.1
 // @description  Automatically apply lr=lang_* language filters to Google search results based on configurable languages.
 // @description:zh-CN 根据可配置语言，自动为 Google 搜索结果应用 lr=lang_* 语言过滤。
 // @description:zh-TW 根據可配置語言，自動為 Google 搜尋結果套用 lr=lang_* 語言過濾。
@@ -216,6 +216,8 @@
 // @match              *://*.google.cat/search*
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM.getValue
+// @grant        GM.setValue
 // @grant        GM_registerMenuCommand
 // ==/UserScript==
 
@@ -224,10 +226,6 @@
 
   const STORAGE_KEY = 'googleSearchLangConfig';
   const CONFIG_VERSION = 1;
-  const LOG_PREFIX = '[GoogleLangFilter]';
-  const SESSION_APPLIED_URL = 'gs_lang_filter_applied_url';
-  const SESSION_RETRY_COUNT = 'gs_lang_filter_retry';
-  const MAX_REDIRECT_ATTEMPTS = 1;
   const DEFAULT_LANGUAGES = Object.freeze(['lang_en']);
 
   const AVAILABLE_LANGUAGES = [
@@ -289,47 +287,15 @@
   );
 
   let cachedConfig = null;
+  let hasCachedConfig = false;
 
-  function log(...args) {
-    console.log(LOG_PREFIX, ...args);
-  }
-
-  function warn(...args) {
-    console.warn(LOG_PREFIX, ...args);
-  }
-
-  function error(...args) {
-    console.error(LOG_PREFIX, ...args);
-  }
-
-  function safeSessionGet(key) {
-    try {
-      return window.sessionStorage.getItem(key);
-    } catch (err) {
-      warn('Unable to read sessionStorage key:', key, err);
-      return null;
-    }
-  }
-
-  function safeSessionSet(key, value) {
-    try {
-      window.sessionStorage.setItem(key, value);
-    } catch (err) {
-      warn('Unable to set sessionStorage key:', key, err);
-    }
-  }
-
-  function safeSessionRemove(key) {
-    try {
-      window.sessionStorage.removeItem(key);
-    } catch (err) {
-      warn('Unable to remove sessionStorage key:', key, err);
-    }
-  }
-
-  function cloneDefaultLanguages() {
-    return Array.from(DEFAULT_LANGUAGES);
-  }
+  const gmApi = typeof GM === 'object' && GM !== null ? GM : null;
+  const gmAsyncGet = gmApi && typeof gmApi.getValue === 'function'
+    ? gmApi.getValue.bind(gmApi)
+    : null;
+  const gmAsyncSet = gmApi && typeof gmApi.setValue === 'function'
+    ? gmApi.setValue.bind(gmApi)
+    : null;
 
   function sanitizeLanguages(languages) {
     if (!Array.isArray(languages)) {
@@ -369,61 +335,112 @@
     const languages =
       sanitizedLanguages.length || shouldKeepEmptySelection
         ? sanitizedLanguages
-        : cloneDefaultLanguages();
-
-    const version =
-      rawConfig && typeof rawConfig.version === 'number'
-        ? Math.max(rawConfig.version, CONFIG_VERSION)
-        : CONFIG_VERSION;
+        : Array.from(DEFAULT_LANGUAGES);
 
     return {
-      version,
+      version: CONFIG_VERSION,
       languages
     };
   }
 
-  function loadConfig() {
-    if (cachedConfig) {
+  function parseStoredValue(value) {
+    if (value == null) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      if (!value) {
+        return null;
+      }
+      try {
+        return JSON.parse(value);
+      } catch (err) {
+        return null;
+      }
+    }
+    if (typeof value === 'object') {
+      return value;
+    }
+    return null;
+  }
+
+  async function readStoredConfig() {
+    if (gmAsyncGet) {
+      try {
+        const value = await gmAsyncGet(STORAGE_KEY, null);
+        return parseStoredValue(value);
+      } catch (err) {
+        return null;
+      }
+    }
+
+    if (typeof GM_getValue === 'function') {
+      try {
+        const value = GM_getValue(STORAGE_KEY, null);
+        return parseStoredValue(value);
+      } catch (err) {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  async function writeStoredConfig(config) {
+    const serialized = JSON.stringify(config);
+
+    if (gmAsyncSet) {
+      try {
+        await gmAsyncSet(STORAGE_KEY, serialized);
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: err && err.message ? err.message : 'Unknown error'
+        };
+      }
+    }
+
+    if (typeof GM_setValue === 'function') {
+      try {
+        GM_setValue(STORAGE_KEY, serialized);
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: err && err.message ? err.message : 'Unknown error'
+        };
+      }
+    }
+
+    return { success: false, error: 'GM_setValue unavailable' };
+  }
+
+  async function loadConfig() {
+    if (hasCachedConfig) {
       return cachedConfig;
     }
 
-    const stored =
-      typeof GM_getValue === 'function' ? GM_getValue(STORAGE_KEY) : null;
-    if (
-      stored &&
-      typeof stored.version === 'number' &&
-      stored.version < CONFIG_VERSION
-    ) {
-      log('Upgrading config from version', stored.version, 'to', CONFIG_VERSION);
-    }
+    const stored = await readStoredConfig();
     cachedConfig = normalizeConfig(stored);
+    hasCachedConfig = true;
     return cachedConfig;
   }
 
-  function saveConfig(config) {
+  async function saveConfig(config) {
     const normalized = normalizeConfig({
       ...config,
       version: CONFIG_VERSION
     });
 
-    if (typeof GM_setValue !== 'function') {
-      warn('GM_setValue is not available; config cannot be persisted');
-      cachedConfig = normalized;
-      return { success: false, error: 'GM_setValue unavailable' };
+    const writeResult = await writeStoredConfig(normalized);
+    cachedConfig = normalized;
+    hasCachedConfig = true;
+
+    if (!writeResult.success) {
+      return writeResult;
     }
 
-    try {
-      GM_setValue(STORAGE_KEY, normalized);
-      cachedConfig = normalized;
-      log('Configuration saved with languages:', normalized.languages.join(', '));
-      return { success: true, config: normalized };
-    } catch (err) {
-      error('Failed to save configuration', err);
-      return {
-        success: false,
-        error: err && err.message ? err.message : 'Unknown error'
-      };
-    }
+    return { success: true, config: normalized };
   }
 
   function buildLrValue(languages) {
@@ -437,12 +454,12 @@
     return window.location.pathname === '/search';
   }
 
-  function applyLanguageFilterIfNeeded(config) {
+  async function applyLanguageFilterIfNeeded(config) {
     if (!isGoogleSearchPage()) {
       return;
     }
 
-    const activeConfig = config || loadConfig();
+    const activeConfig = config || (await loadConfig());
 
     const params = new URLSearchParams(window.location.search);
     const query = (params.get('q') || '').trim();
@@ -458,14 +475,6 @@
     const currentUrl = window.location.href;
 
     if (params.get('lr') === lr) {
-      safeSessionRemove(SESSION_RETRY_COUNT);
-      safeSessionSet(SESSION_APPLIED_URL, currentUrl);
-      return;
-    }
-
-    const lastAppliedUrl = safeSessionGet(SESSION_APPLIED_URL);
-    if (lastAppliedUrl === currentUrl) {
-      warn('Language filter already applied for current URL, skipping redirect');
       return;
     }
 
@@ -481,21 +490,21 @@
       return;
     }
 
-    const retryCount = Number(safeSessionGet(SESSION_RETRY_COUNT) || '0');
-    if (retryCount >= MAX_REDIRECT_ATTEMPTS) {
-      error('Max redirect attempts reached, stopping to prevent loop');
-      safeSessionRemove(SESSION_RETRY_COUNT);
-      safeSessionSet(SESSION_APPLIED_URL, currentUrl);
-      return;
-    }
-
-    safeSessionSet(SESSION_RETRY_COUNT, String(retryCount + 1));
-    safeSessionSet(SESSION_APPLIED_URL, newUrl);
-    log('Applying language filter with lr value:', lr);
     window.location.replace(newUrl);
   }
 
   function openConfigDialog(initialConfig) {
+    if (!document.body) {
+      window.addEventListener(
+        'DOMContentLoaded',
+        () => {
+          openConfigDialog(initialConfig);
+        },
+        { once: true }
+      );
+      return;
+    }
+
     const existing = document.getElementById('gs-lang-config-overlay');
     if (existing) {
       existing.remove();
@@ -564,11 +573,9 @@
     list.style.marginTop = '4px';
 
     const initialLanguages =
-      initialConfig &&
-      Array.isArray(initialConfig.languages) &&
-      initialConfig.languages.length
-        ? sanitizeLanguages(initialConfig.languages)
-        : cloneDefaultLanguages();
+      initialConfig && Array.isArray(initialConfig.languages)
+        ? initialConfig.languages
+        : Array.from(DEFAULT_LANGUAGES);
     const selectedSet = new Set(initialLanguages);
 
     function renderList(filterText) {
@@ -663,25 +670,31 @@
       closeOverlay();
     });
 
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       saveBtn.textContent = '保存中...';
       statusText.textContent = '';
       const config = { languages: Array.from(selectedSet) };
-      const result = saveConfig(config);
+      try {
+        const result = await saveConfig(config);
 
-      if (result.success) {
-        statusText.textContent = '配置已保存';
-        setTimeout(() => {
-          closeOverlay();
-        }, 400);
-      } else {
+        if (result.success) {
+          statusText.textContent = '配置已保存';
+          setTimeout(() => {
+            closeOverlay();
+          }, 400);
+          return;
+        }
+
         statusText.textContent = result.error
           ? `保存失败: ${result.error}`
           : '保存失败';
-        saveBtn.disabled = false;
-        saveBtn.textContent = saveDefaultLabel;
+      } catch (err) {
+        statusText.textContent = '保存失败: 未知错误';
       }
+
+      saveBtn.disabled = false;
+      saveBtn.textContent = saveDefaultLabel;
     });
 
     buttons.appendChild(cancelBtn);
@@ -705,12 +718,22 @@
     document.body.appendChild(overlay);
   }
 
-  const config = loadConfig();
-  applyLanguageFilterIfNeeded(config);
+  loadConfig()
+    .then((config) => {
+      return applyLanguageFilterIfNeeded(config);
+    })
+    .catch(() => {
+      // Ignore storage errors during initial load; defaults will be used on next invocation.
+    });
 
   if (typeof GM_registerMenuCommand === 'function') {
-    GM_registerMenuCommand('配置 Google 搜索语言过滤', () => {
-      openConfigDialog(loadConfig());
+    GM_registerMenuCommand('配置 Google 搜索语言过滤', async () => {
+      try {
+        const config = await loadConfig();
+        openConfigDialog(config);
+      } catch (err) {
+        openConfigDialog(normalizeConfig(null));
+      }
     });
   }
 })();

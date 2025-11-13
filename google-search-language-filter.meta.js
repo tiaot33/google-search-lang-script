@@ -7,7 +7,7 @@
 // @name:fa      فیلتر زبان جستجوی گوگل
 // @name:ru      Фильтр языка поиска Google
 // @namespace    google-search-lang-script
-// @version      0.1.0
+// @version      0.1.1
 // @description  Automatically apply lr=lang_* language filters to Google search results based on configurable languages.
 // @description:zh-CN 根据可配置语言,自动为 Google 搜索结果应用 lr=lang_* 语言过滤。
 // @description:zh-TW 根據可配置語言,自動為 Google 搜尋結果套用 lr=lang_* 語言過濾。
@@ -24,5 +24,7 @@
 // @author       tiaot33
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM.getValue
+// @grant        GM.setValue
 // @grant        GM_registerMenuCommand
 // ==/UserScript==
