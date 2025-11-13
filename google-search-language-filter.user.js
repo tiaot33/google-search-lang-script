@@ -19,6 +19,9 @@
 // @downloadURL  https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.user.js
 // @updateURL    https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.meta.js
 // @supportURL   https://github.com/tiaot33/google-search-lang-script/issues
+// @run-at       document-end
+// @noframes
+// @author       tiaot33
 // @match              *://*.google.com/search*
 // @match              *://*.google.ad/search*
 // @match              *://*.google.ae/search*
@@ -220,6 +223,12 @@
   'use strict';
 
   const STORAGE_KEY = 'googleSearchLangConfig';
+  const CONFIG_VERSION = 1;
+  const LOG_PREFIX = '[GoogleLangFilter]';
+  const SESSION_APPLIED_URL = 'gs_lang_filter_applied_url';
+  const SESSION_RETRY_COUNT = 'gs_lang_filter_retry';
+  const MAX_REDIRECT_ATTEMPTS = 1;
+  const DEFAULT_LANGUAGES = Object.freeze(['lang_en']);
 
   const AVAILABLE_LANGUAGES = [
     { code: 'lang_ar', label: 'Arabic' },
@@ -275,27 +284,144 @@
     { code: 'lang_vi', label: 'Vietnamese' }
   ];
 
+  const AVAILABLE_LANGUAGE_CODES = new Set(
+    AVAILABLE_LANGUAGES.map((lang) => lang.code)
+  );
+
+  let cachedConfig = null;
+
+  function log(...args) {
+    console.log(LOG_PREFIX, ...args);
+  }
+
+  function warn(...args) {
+    console.warn(LOG_PREFIX, ...args);
+  }
+
+  function error(...args) {
+    console.error(LOG_PREFIX, ...args);
+  }
+
+  function safeSessionGet(key) {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch (err) {
+      warn('Unable to read sessionStorage key:', key, err);
+      return null;
+    }
+  }
+
+  function safeSessionSet(key, value) {
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch (err) {
+      warn('Unable to set sessionStorage key:', key, err);
+    }
+  }
+
+  function safeSessionRemove(key) {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch (err) {
+      warn('Unable to remove sessionStorage key:', key, err);
+    }
+  }
+
+  function cloneDefaultLanguages() {
+    return Array.from(DEFAULT_LANGUAGES);
+  }
+
+  function sanitizeLanguages(languages) {
+    if (!Array.isArray(languages)) {
+      return [];
+    }
+
+    const seen = new Set();
+    const result = [];
+
+    languages.forEach((code) => {
+      if (typeof code !== 'string') {
+        return;
+      }
+      const trimmed = code.trim();
+      if (!trimmed || !AVAILABLE_LANGUAGE_CODES.has(trimmed)) {
+        return;
+      }
+      if (seen.has(trimmed)) {
+        return;
+      }
+      seen.add(trimmed);
+      result.push(trimmed);
+    });
+
+    return result;
+  }
+
+  function normalizeConfig(rawConfig) {
+    const sanitizedLanguages = sanitizeLanguages(
+      rawConfig && rawConfig.languages
+    );
+    const languages = sanitizedLanguages.length
+      ? sanitizedLanguages
+      : cloneDefaultLanguages();
+
+    const version =
+      rawConfig && typeof rawConfig.version === 'number'
+        ? Math.max(rawConfig.version, CONFIG_VERSION)
+        : CONFIG_VERSION;
+
+    return {
+      version,
+      languages
+    };
+  }
+
   function loadConfig() {
+    if (cachedConfig) {
+      return cachedConfig;
+    }
+
     const stored =
       typeof GM_getValue === 'function' ? GM_getValue(STORAGE_KEY) : null;
-    if (stored && Array.isArray(stored.languages)) {
-      return { languages: stored.languages };
+    if (
+      stored &&
+      typeof stored.version === 'number' &&
+      stored.version < CONFIG_VERSION
+    ) {
+      log('Upgrading config from version', stored.version, 'to', CONFIG_VERSION);
     }
-    return { languages: ['lang_en'] };
+    cachedConfig = normalizeConfig(stored);
+    return cachedConfig;
   }
 
   function saveConfig(config) {
-    if (typeof GM_setValue === 'function') {
-      GM_setValue(STORAGE_KEY, { languages: config.languages });
+    const normalized = normalizeConfig({
+      ...config,
+      version: CONFIG_VERSION
+    });
+
+    if (typeof GM_setValue !== 'function') {
+      warn('GM_setValue is not available; config cannot be persisted');
+      cachedConfig = normalized;
+      return { success: false, error: 'GM_setValue unavailable' };
+    }
+
+    try {
+      GM_setValue(STORAGE_KEY, normalized);
+      cachedConfig = normalized;
+      log('Configuration saved with languages:', normalized.languages.join(', '));
+      return { success: true, config: normalized };
+    } catch (err) {
+      error('Failed to save configuration', err);
+      return {
+        success: false,
+        error: err && err.message ? err.message : 'Unknown error'
+      };
     }
   }
 
   function buildLrValue(languages) {
-    const filtered = (languages || []).filter(Boolean);
-    if (!filtered.length) {
-      return '';
-    }
-    return filtered.join('|');
+    return (languages || []).filter(Boolean).join('|');
   }
 
   function isGoogleSearchPage() {
@@ -310,18 +436,30 @@
       return;
     }
 
+    const activeConfig = config || loadConfig();
+
     const params = new URLSearchParams(window.location.search);
     const query = (params.get('q') || '').trim();
     if (!query) {
       return;
     }
 
-    const lr = buildLrValue(config.languages);
+    const lr = buildLrValue(activeConfig.languages);
     if (!lr) {
       return;
     }
 
+    const currentUrl = window.location.href;
+
     if (params.get('lr') === lr) {
+      safeSessionRemove(SESSION_RETRY_COUNT);
+      safeSessionSet(SESSION_APPLIED_URL, currentUrl);
+      return;
+    }
+
+    const lastAppliedUrl = safeSessionGet(SESSION_APPLIED_URL);
+    if (lastAppliedUrl === currentUrl) {
+      warn('Language filter already applied for current URL, skipping redirect');
       return;
     }
 
@@ -333,9 +471,22 @@
       window.location.pathname +
       (newSearch ? `?${newSearch}` : '');
 
-    if (newUrl !== window.location.href) {
-      window.location.replace(newUrl);
+    if (newUrl === currentUrl) {
+      return;
     }
+
+    const retryCount = Number(safeSessionGet(SESSION_RETRY_COUNT) || '0');
+    if (retryCount >= MAX_REDIRECT_ATTEMPTS) {
+      error('Max redirect attempts reached, stopping to prevent loop');
+      safeSessionRemove(SESSION_RETRY_COUNT);
+      safeSessionSet(SESSION_APPLIED_URL, currentUrl);
+      return;
+    }
+
+    safeSessionSet(SESSION_RETRY_COUNT, String(retryCount + 1));
+    safeSessionSet(SESSION_APPLIED_URL, newUrl);
+    log('Applying language filter with lr value:', lr);
+    window.location.replace(newUrl);
   }
 
   function openConfigDialog(initialConfig) {
@@ -356,6 +507,9 @@
     overlay.style.display = 'flex';
     overlay.style.alignItems = 'center';
     overlay.style.justifyContent = 'center';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'gs-lang-config-title');
 
     const panel = document.createElement('div');
     panel.style.background = '#fff';
@@ -369,6 +523,9 @@
     panel.style.fontSize = '13px';
 
     const title = document.createElement('div');
+    title.id = 'gs-lang-config-title';
+    title.setAttribute('role', 'heading');
+    title.setAttribute('aria-level', '1');
     title.textContent = 'Google 搜索语言过滤配置';
     title.style.fontSize = '15px';
     title.style.fontWeight = 'bold';
@@ -383,7 +540,7 @@
 
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
-    searchInput.placeholder = '按语言名称或代码过滤，例如 \"english\" 或 \"en\"';
+    searchInput.placeholder = '按语言名称或代码过滤，例如 "english" 或 "en"';
     searchInput.style.width = '100%';
     searchInput.style.boxSizing = 'border-box';
     searchInput.style.padding = '4px 6px';
@@ -399,7 +556,14 @@
     list.style.border = '1px solid #ddd';
     list.style.padding = '8px 10px';
     list.style.marginTop = '4px';
-    const selectedSet = new Set(initialConfig.languages || []);
+
+    const initialLanguages =
+      initialConfig &&
+      Array.isArray(initialConfig.languages) &&
+      initialConfig.languages.length
+        ? sanitizeLanguages(initialConfig.languages)
+        : cloneDefaultLanguages();
+    const selectedSet = new Set(initialLanguages);
 
     function renderList(filterText) {
       const normalized = (filterText || '').trim().toLowerCase();
@@ -457,7 +621,8 @@
     cancelBtn.style.marginRight = '8px';
 
     const saveBtn = document.createElement('button');
-    saveBtn.textContent = '保存';
+    const saveDefaultLabel = '保存';
+    saveBtn.textContent = saveDefaultLabel;
     saveBtn.style.background = '#1a73e8';
     saveBtn.style.color = '#fff';
     saveBtn.style.border = 'none';
@@ -465,14 +630,52 @@
     saveBtn.style.borderRadius = '4px';
     saveBtn.style.cursor = 'pointer';
 
+    const statusText = document.createElement('div');
+    statusText.style.marginTop = '6px';
+    statusText.style.minHeight = '1em';
+    statusText.style.fontSize = '12px';
+    statusText.style.textAlign = 'right';
+    statusText.setAttribute('role', 'status');
+    statusText.setAttribute('aria-live', 'polite');
+
+    const handleKeydown = (event) => {
+      if (event.key === 'Escape') {
+        closeOverlay();
+      }
+    };
+
+    function closeOverlay() {
+      document.removeEventListener('keydown', handleKeydown);
+      if (overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+    }
+
+    document.addEventListener('keydown', handleKeydown);
+
     cancelBtn.addEventListener('click', () => {
-      overlay.remove();
+      closeOverlay();
     });
 
     saveBtn.addEventListener('click', () => {
+      saveBtn.disabled = true;
+      saveBtn.textContent = '保存中...';
+      statusText.textContent = '';
       const config = { languages: Array.from(selectedSet) };
-      saveConfig(config);
-      overlay.remove();
+      const result = saveConfig(config);
+
+      if (result.success) {
+        statusText.textContent = '配置已保存';
+        setTimeout(() => {
+          closeOverlay();
+        }, 400);
+      } else {
+        statusText.textContent = result.error
+          ? `保存失败: ${result.error}`
+          : '保存失败';
+        saveBtn.disabled = false;
+        saveBtn.textContent = saveDefaultLabel;
+      }
     });
 
     buttons.appendChild(cancelBtn);
@@ -483,12 +686,13 @@
     panel.appendChild(searchWrapper);
     panel.appendChild(list);
     panel.appendChild(buttons);
+    panel.appendChild(statusText);
 
     overlay.appendChild(panel);
 
     overlay.addEventListener('click', (event) => {
       if (event.target === overlay) {
-        overlay.remove();
+        closeOverlay();
       }
     });
 

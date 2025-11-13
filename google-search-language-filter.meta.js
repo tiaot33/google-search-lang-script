@@ -19,6 +19,9 @@
 // @downloadURL  https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.user.js
 // @updateURL    https://raw.githubusercontent.com/tiaot33/google-search-lang-script/main/google-search-language-filter.meta.js
 // @supportURL   https://github.com/tiaot33/google-search-lang-script/issues
+// @run-at       document-end
+// @noframes
+// @author       tiaot33
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
