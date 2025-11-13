@@ -358,12 +358,18 @@
   }
 
   function normalizeConfig(rawConfig) {
-    const sanitizedLanguages = sanitizeLanguages(
-      rawConfig && rawConfig.languages
-    );
-    const languages = sanitizedLanguages.length
-      ? sanitizedLanguages
-      : cloneDefaultLanguages();
+    const hasLanguages =
+      rawConfig && Object.prototype.hasOwnProperty.call(rawConfig, 'languages');
+    const rawLanguages = hasLanguages ? rawConfig.languages : undefined;
+    const sanitizedLanguages = sanitizeLanguages(rawLanguages);
+
+    const shouldKeepEmptySelection =
+      Array.isArray(rawLanguages) && rawLanguages.length === 0;
+
+    const languages =
+      sanitizedLanguages.length || shouldKeepEmptySelection
+        ? sanitizedLanguages
+        : cloneDefaultLanguages();
 
     const version =
       rawConfig && typeof rawConfig.version === 'number'
